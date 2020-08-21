@@ -1,10 +1,12 @@
 close all;
 clc;clear;
-
-%% drone parameters
 global x r dr euler w u T M R phi theta psi g Ixx Iyy Izz;
-global dx t dt m;
-
+global dx t dt m Ra;
+global phi_des phi_err phi_err_prev phi_err_sum theta_des theta_err theta_err_prev theta_err_sum psi_des psi_err psi_err_prev psi_err_sum zdot_des zdot_err zdot_err_prev zdot_err_sum;
+global P_phi I_phi D_phi P_theta I_theta D_theta P_psi I_psi D_psi P_zdot I_zdot D_zdot;
+global x_des x_err x_err_prev x_err_sum y_des y_err y_err_prev y_err_sum;
+global P_x I_x D_x P_y I_y D_y;
+%% drone parameters
 m=1.25;
 armLength=0.265;
 Ixx=0.0232;
@@ -12,13 +14,13 @@ Iyy=0.0232;
 Izz=0.0468;
 
 % X=[x y z dx dy dz phi theta psi p q r] 
-initStates=[0.0, 0.0, 0.0,... %x y z
+initStates=[0.0, 0.0, -6.0,... %x y z
                   0.0,0.0,0.0,... %dx dy dz
                   0.0,0.0,0.0,... % phi theta psi
                   0.0,0.0,0.0]'; %pqr
               
 % u1 u2 u3 u4
-initInputs=[0.0 0.0 0.0 -2];
+initInputs=[0.0 0.0 0.0 0];
 
 %for plotting in 3d graph
 drone_body=[armLength 0.0 0.0 1
@@ -30,16 +32,20 @@ drone_body=[armLength 0.0 0.0 1
        
  %% PID parameters
  
- P_phi=0;I_phi=0;D_phi=0;
- P_theta=0;I_theta=0;D_theta=0;
- P_psi=0;I_psi=0;D_psi=0;
- P_zdot=0;I_zdot=0;D_zdot=0;
+ P_phi=0.2;I_phi=0;D_phi=0.15;
+ P_theta=0.2;I_theta=0;D_theta=0.15;
+ P_psi=0.4;I_psi=0;D_psi=0.3;
+ P_zdot=10;I_zdot=0.2;D_zdot=0;
+ P_x=0.6;I_x=0.0;D_x=0.6;
+ P_y=0.6;I_y=0.0;D_y=0.6;
+
+ 
  
  %% environment parameters
 g=9.81;
 t=0.0;
 dt=0.01;
-simTime=2;
+simTime=3;
 % x-> [x y z dx dy dz phi theta psi p q r]
 % r-> x y z 
 % dr-> dx dy dz 
@@ -49,6 +55,7 @@ simTime=2;
 % u1 is total trust T-> total trust M->[M1 M2 M3]'
 
 %% other variables
+
 phi_des=0;
 phi_err=0;
 phi_err_prev=0;
@@ -68,16 +75,31 @@ zdot_des=0;
 zdot_err=0;
 zdot_err_prev=0;
 zdot_err_sum=0;
+
+x_des=0;
+x_err=0;
+x_err_prev=0;
+x_err_sum=0;
+
+y_des=0;
+y_err=0;
+y_err_prev=0;
+y_err_sum=0;
 %% initializing the drone
+%x x y z dx dy dz phi theta psi p q r
 x=initStates;
 r=x(1:3);
 dr=x(4:6);
 euler=x(7:9);
+phi=euler(1);
+theta=euler(2);
+psi=euler(3);
 w=x(10:12);
+
 u=initInputs;
 T=u(1);
 M=u(2:4);
-dx=[0 0 0 0 0 0 0 0 0 0 0 0];
+dx=[0 0 0 0 0 0 0 0 0 0 0 0]';
 R=generate_R(phi,theta,psi);
 %% 3D figures for simulation
 fig1=figure('pos',[0 200 800 500]);
@@ -85,13 +107,14 @@ h=gca;
 view(3);
 fig1.CurrentAxes.ZDir ='Reverse';
 fig1.CurrentAxes.YDir ='Reverse';
+axis equal;
+hold(gca,'on');
 xlabel('X[m]');
 ylabel('Y[m]');
 zlabel('Z[m]');
 grid minor;
 xlim([-5 5]);ylim([-5 5]);zlim([-8 0]);
-axis equal;
-hold(gca,'on');
+
 
 wHb=[R x(1:3); % a transformation matrix for both attitude and position
      0.0 0.0 0.0 1];
@@ -104,7 +127,9 @@ wHb=[R x(1:3); % a transformation matrix for both attitude and position
  fig1_ARM13=plot3(gca,d_attitude(1,[1 3]),d_attitude(2,[1 3]) , d_attitude(3,[1 3]),'-ro','MarkerSize',5);
  fig1_ARM24=plot3(gca,d_attitude(1,[2 4]),d_attitude(2,[2 4]) , d_attitude(3,[2 4]),'-bo','MarkerSize',5);
  fig1_payload=plot3(gca,d_attitude(1,[5 6]),d_attitude(2,[5 6]) , d_attitude(3,[5 6]),'-k','LineWidth',3);
- %fig1_shadow=plot3()
+ fig1_shadow=plot3(gca,0,0,0,'xk','lineWidth',3);
+ 
+ hold(gca,'off');
 
 %% data figures
 fig2=figure('pos',[800 400 800 400]);
@@ -129,8 +154,8 @@ title('Z_dot(m/s)');
 hold on;
 
 %% main loop
-commandSig=[0 0 0 0];
-
+commandSig=[1 1 10 1 -50 -50];
+commandSig=commandSig*(1/60);
 for i=1:simTime/0.01
      AttitudeCtrl(commandSig);
      UpdateState();
@@ -153,52 +178,126 @@ wHb=[R x(1:3); % a transformation matrix for both attitude and position
      'xData',d_attitude(1,[5 6]),...
      'yData',d_attitude(2,[5 6]),...
      'zData',d_attitude(3,[5 6]));
- 
-end
+ set(fig1_shadow, ...
+     'xData',x(1),...
+     'yData',x(2),...
+     'zData',0);
+ figure(2)
+  grid minor;
+subplot(2,3,1);
+plot(i/100,x(7)*(180/pi),'.');
+subplot(2,3,2);
+plot(i/100,x(8)*(180/pi),'.');
+subplot(2,3,3);
+plot(i/100,x(9)*(180/pi),'.');
+subplot(2,3,4);
+plot(i/100,x(1),'.');
+subplot(2,3,5);
+plot(i/100,x(2),'.');
+subplot(2,3,6);
+plot(i/100,x(6),'.');%x(6)
+ drawnow;
 
+    if(x(3)>=0)
+     msgbox('z=0','Error','error');
+     break;
+    end
+end
 %% MAIN FUNCTIONs
-function EvalEOM()
+function evaluate()
+global phi_des phi_err phi_err_prev phi_err_sum theta_des theta_err theta_err_prev theta_err_sum psi_des psi_err psi_err_prev psi_err_sum zdot_des zdot_err zdot_err_prev zdot_err_sum;
 global p q x r dr euler w u T M R phi theta psi m g Ixx Iyy Izz;
-global dx t dt;
-%dx -> dx dy dz ddx ddy ddz dphi dtheta dpsi dp dq dr
-dx(1:3)= dr;
+global dx t dt Ra;
+global x_des x_err x_err_prev x_err_sum y_des y_err y_err_prev y_err_sum;
+global P_x I_x D_x P_y I_y D_y;
+%x x y z dx dy dz phi theta psi p q r
+%dx -> dx dy dz ddx ddy ddz dphi dtheta dpsi dp dq dr8
+R=generate_R(phi,theta,psi);
 phi = euler(1);
 theta = euler(2);
 psi=euler(3);
 %m*dx(4:6)' = [0 0 mg]' + R*[0 0 -u1]'
 
+dx(1:3)= x(4:6);
 dx(4:6)= (1/m) * ([0 0 m*g]'+R*[0 0 -u(1)]');
 
 % dot euler part's generation
-dx(7:9)=in_transform(theta,phi,w)';
+dx(7:9)=in_transform(theta,phi,w);
 p=w(1);
 q=w(2);
-r=w(3);
-dx(10)=M(1)/Ixx + (Iyy-Izz)*q*r*(1/Ixx);
-dx(11)=M(2)/Iyy + (Izz-Ixx)*r*p*(1/Iyy);
+Ra=w(3);
+
+%  calculation of euler angles from dx(4) and dx(5)
+%position controller
+phi_des= m/(u(1))*(-dx(4)*sin(psi)+dx(5)*cos(psi));
+theta_des=m/(u(1))*(-dx(4)*cos(psi)-dx(5)*sin(psi));
+
+dx(10)=M(1)/Ixx + (Iyy-Izz)*q*Ra*(1/Ixx);
+dx(11)=M(2)/Iyy + (Izz-Ixx)*Ra*p*(1/Iyy);
 dx(12)=M(3)/Izz + (Ixx-Iyy)*p*q*(1/Izz);
 end
 
 function UpdateState()
+
 global r dr euler w u T M m g;
 global t dt x dx ;
 t=t+dt;
-EvalEOM();
-x=x+dx*dt;%simple integration
+evaluate();
+x=x+dx*dt;
+%simple integration
 r=x(1:3);
 dr=x(4:6);
 euler=x(7:9);
 w=x(10:12);
 end
 function AttitudeCtrl(refSig)
-global r dr euler w u T M m g;
+global phi_des phi_err phi_err_prev phi_err_sum theta_des theta_err theta_err_prev theta_err_sum psi_des psi_err psi_err_prev psi_err_sum zdot_des zdot_err zdot_err_prev zdot_err_sum;
+global r dr euler w u T M m g phi theta psi;
 global t dt x dx ;
+global P_phi I_phi D_phi P_theta I_theta D_theta P_psi I_psi D_psi P_zdot I_zdot D_zdot;
+global x_des x_err x_err_prev x_err_sum y_des y_err y_err_prev y_err_sum;
+global P_x I_x D_x P_y I_y D_y;
 
+psi_des=refSig(3);
+zdot_des=refSig(4);
+x_des=refSig(5);
+y_des=refSig(6);
+
+phi_err = phi_des - phi;
+theta_err=theta_des-theta;
+psi_err=psi_des-psi;
+zdot_err=zdot_des-dx(3);
+x_err=x_des-x(1);
+y_err=y_des-x(2);
+
+%% inner controller
+u(1)= P_zdot*zdot_err+D_phi*(zdot_err-zdot_err_prev)/dt+I_phi*zdot_err_sum;
+u(2)= P_phi*phi_err+D_phi*(phi_err-phi_err_prev)/dt+I_phi*phi_err_sum;
+u(3)= P_theta*theta_err+D_theta*(theta_err-theta_err_prev)/dt+I_theta*theta_err_sum;
+u(4)= P_psi*psi_err+D_psi*(psi_err-psi_err_prev)/dt+I_psi*psi_err_sum;
+zdot_err_sum=+zdot_err;
+zdot_err_prev=zdot_err;
+phi_err_sum=+phi_err;
+phi_err_prev=phi_err;
+psi_err_sum=+psi_err;
+psi_err_prev=psi_err;
+theta_err_sum=+theta_err;
+theta_err_prev=theta_err;
+x_err_sum=+x_err;
+x_err_prev=x_err;
+y_err_sum=+y_err;
+y_err_prev=y_err;
+
+%% outer controller
+dx(4)= P_x*x_err+D_x*(x_err-x_err_prev)/dt+I_x*x_err_sum;
+dx(5)=P_y*y_err+D_y*(y_err-y_err_prev)/dt+I_y*y_err_sum;
 %test case(hover)
-u(1)=m*g;
-u(2)=0;
-u(3)=0;
-u(4)=0;
+u(1)=m*g+1;
+% u(2)=1;
+% u(3)=0.0;
+% u(4)=0.0;
+T=u(1);
+M=u(2:4);
 
 end
 %% R matrix generation functions
@@ -206,7 +305,7 @@ function Lpsi_matris = Lpsi(psi)
 Lpsi_matris =[
     cos(psi) sin(psi) 0
     -sin(psi) cos(psi) 0
-    0   0   1];
+    0 0 1];
 end%around z axis yaw
 function Ltheta_matris = Ltheta(theta)
 Ltheta_matris=[
@@ -240,9 +339,11 @@ function transformed_matrix=transform(theta,fi,angular_velocity_vector)
                
 end
 function transformed_matrix=in_transform(theta,fi,angular_velocity_vector)
-    %pqr to dot_vector
+    %pqr to dot_vector phi* theta* psi* 
     transformation_matrix=[
-                   1 sin(theta)*tan(theta) cos(fi)*tan(theta);0 cos(fi) -sin(theta);0 sin(fi)*sec(theta) cos(fi)*sec(theta);];
+                   1, sin(theta)*tan(theta), cos(fi)*tan(theta)
+                   0, cos(fi), -sin(theta)
+                   0, sin(fi)*sec(theta), cos(fi)*sec(theta)];
                
               transformed_matrix=transformation_matrix*angular_velocity_vector; 
                
